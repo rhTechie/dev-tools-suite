@@ -9,6 +9,7 @@ SylixOS 开发辅助工具集，包含板卡调试、文件上传、寄存器读
 | `telnet_interrupt_monitor/` | 通过 Telnet 周期性监测目标 IRQ 中断计数 |
 | `ftp_sylixos_upload/` | 将文件上传到 SylixOS 板卡 |
 | `readreg/` | 在 Linux 或 SylixOS 下读取寄存器值，用于调试和对比 |
+| `eth_dual_selftest/` | SylixOS 单板双网口原始二层自测用例，区分物理链路验证与吞吐基准 |
 
 ---
 
@@ -184,5 +185,113 @@ python -m http.server 8888
 ```bash
 wget http://电脑ip:8888/file
 ```
+
+---
+
+## eth_dual_selftest
+
+用于 **SylixOS 单板双网口直连** 场景下的网络自测工具，适合在 **没有陪测机** 的情况下，快速验证板卡当前双网口网络配置和链路状态是否正常。
+
+该工具适用于：
+
+- 一块板卡上有两个以太网口
+- 两个网口之间通过网线直连
+- 需要在板端直接测试网络是否可用
+- 没有额外 PC 或服务器作为陪测机
+
+### 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `eth_dual_selftest/eth_dual_selftest.c` | SylixOS 版本单板双网口自测工具源码 |
+
+### 测试流程图
+
+![eth_dual_selftest 测试流程图](<eth_dual_selftest/flowchart .jpg>)
+
+### 主要模式
+
+- `verify`
+  适合做“配置是否正常、链路是否稳定”的验证模式。更强调验证结果的可靠性。
+
+- `bench`
+  适合做“当前双网口直连场景下，大致能跑到多大吞吐”的基准模式。更强调速度观测。
+
+### 编译方式
+
+该源码面向 SylixOS 工程环境使用，通常做法是：
+
+1. 将 `eth_dual_selftest.c` 放入 SylixOS App 工程
+2. 使用项目已有的 `config.mk + multi-platform.mk` 构建
+
+如使用交叉编译器单独编译，需确保包含：
+
+- `SylixOS.h`
+- `netpacket/packet.h`
+- `net/if_arp.h`
+
+以及 SylixOS 的网络头文件搜索路径。
+
+### 使用方法
+
+默认运行：
+
+```bash
+./eth_dual_selftest
+```
+
+默认模式为 `bench`。
+
+常见用法：
+
+```bash
+# 跑吞吐基准模式，持续 10 秒
+./eth_dual_selftest -d 10
+
+# 跑验证模式，持续 5 秒
+./eth_dual_selftest -m verify -d 5
+
+# 指定两个网口名
+./eth_dual_selftest -a en1 -b en2 -m verify -d 5
+
+# 指定单次测试 payload 大小
+./eth_dual_selftest -m bench -d 10 -sl 1472
+```
+
+### 参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `-a <ifname>` | 指定网口 A，默认 `en1` |
+| `-b <ifname>` | 指定网口 B，默认 `en2` |
+| `-m <mode>` | 测试模式，可选 `verify` 或 `bench`，默认 `bench` |
+| `-d <sec>` | 每个阶段持续时间（秒）。设置后按时长运行 |
+| `-sc <count>` | 在未指定 `-d` 时，单方向发送的数据包数量 |
+| `-sl <bytes>` | 单方向测试 payload 大小 |
+| `-sg <usec>` | `verify` 模式下发送间隔（微秒） |
+| `-t <msec>` | 发送结束后接收等待超时（毫秒） |
+
+### 使用建议
+
+- 如果目的是先确认“当前网络配置和链路状态是否正常”，优先使用：
+
+```bash
+./eth_dual_selftest -m verify -d 5
+```
+
+- 如果目的是看“大致吞吐能力”，优先使用：
+
+```bash
+./eth_dual_selftest -d 10
+```
+
+- 运行前请确保两个网口已经直连，且接口处于 `UP` / `RUNNING` 状态。
+
+### 典型场景
+
+- 板卡出厂前的单板双口网络自检
+- 无陪测机条件下的网络配置快速验证
+- 现场调试时快速确认两个网口是否工作正常
+- 粗略观测双口直连场景下的板端吞吐水平
 
 ---
