@@ -207,7 +207,7 @@ wget http://电脑ip:8888/file
 
 ### 测试流程图
 
-![eth_dual_selftest 测试流程图](<eth_dual_selftest/flowchart .jpg>)
+![eth_dual_selftest 测试流程图](eth_dual_selftest/flowchart.jpg)
 
 ### 主要模式
 
