@@ -6,6 +6,7 @@ SylixOS FTP Upload Tool
 
 import argparse
 import os
+import re
 import sys
 from ftplib import FTP
 import xml.etree.ElementTree as ET
@@ -48,6 +49,85 @@ def upload_file(ftp, local_file, remote_path):
     size_str = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
     print(f"✓ 上传成功: {remote_path} ({size_str})")
 
+def parse_config_mk(project_path):
+    """从 config.mk 中提取平台列表和构建类型"""
+    config_mk = os.path.join(project_path, 'config.mk')
+    platforms = []
+    debug_level = 'release'
+
+    if not os.path.exists(config_mk):
+        return platforms, debug_level
+
+    with open(config_mk, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            stripped = line.strip()
+
+            debug_match = re.match(r'^DEBUG_LEVEL\s*:?=\s*(.+)$', stripped)
+            if debug_match:
+                value = debug_match.group(1).strip().lower()
+                if value in ('debug', 'release'):
+                    debug_level = value
+                continue
+
+            platform_match = re.match(r'^PLATFORMS\s*:?=\s*(.+)$', stripped)
+            if platform_match:
+                value = platform_match.group(1).strip()
+                if value:
+                    platforms = value.split()
+
+    return platforms, debug_level
+
+def discover_build_platforms(project_path):
+    """从 build 目录推断已存在的平台输出"""
+    build_dir = os.path.join(project_path, 'build')
+    if not os.path.isdir(build_dir):
+        return []
+
+    return sorted(
+        entry for entry in os.listdir(build_dir)
+        if os.path.isdir(os.path.join(build_dir, entry))
+    )
+
+def resolve_reproject_src_candidates(src, project_path, project_name, platforms, debug_level):
+    """展开 .reproject 中的本地源路径变量，返回候选路径列表"""
+    normalized = src.replace('\\', '/')
+    normalized = normalized.replace(f'$(WORKSPACE_{project_name})', project_path)
+
+    output_name = 'Debug' if debug_level == 'debug' else 'Release'
+
+    replacements_list = []
+    for platform in platforms:
+        replacements_list.append({
+            '$(Output)': f'build/{platform}/{output_name}',
+            '$(Debug)': f'build/{platform}/Debug',
+            '$(Release)': f'build/{platform}/Release',
+        })
+
+    # 兼容部分旧工程直接把 $(Output) 指向项目根下的 Release/Debug
+    replacements_list.append({
+        '$(Output)': output_name,
+        '$(Debug)': 'Debug',
+        '$(Release)': 'Release',
+    })
+
+    candidates = []
+    seen = set()
+
+    for replacements in replacements_list:
+        resolved = normalized
+        for token, value in replacements.items():
+            resolved = resolved.replace(token, value)
+
+        resolved = os.path.normpath(resolved)
+        if resolved not in seen:
+            seen.add(resolved)
+            candidates.append(resolved)
+
+    if not candidates:
+        candidates.append(os.path.normpath(normalized))
+
+    return candidates
+
 def parse_reproject(project_path):
     """解析 .reproject 文件，返回板卡 IP 和上传列表"""
     reproject_file = os.path.join(project_path, '.reproject')
@@ -68,13 +148,30 @@ def parse_reproject(project_path):
         print("错误: .reproject 文件中找不到 DeviceSetting")
         sys.exit(1)
 
-    board_ip = device_setting.get('DevName')
+    board_ip = (device_setting.get('DevName') or '').strip()
     if not board_ip:
         print("错误: .reproject 文件中找不到板卡 IP (DevName)")
         sys.exit(1)
 
     # 获取项目名称
     project_name = os.path.basename(project_path)
+    config_platforms, debug_level = parse_config_mk(project_path)
+    device_platform = (device_setting.get('Platform') or '').strip()
+    build_platforms = discover_build_platforms(project_path)
+
+    platforms = []
+    if device_platform:
+        platforms.append(device_platform)
+    platforms.extend(config_platforms)
+    platforms.extend(build_platforms)
+
+    # 去重并保留顺序；完全没有线索时仍保留 ARM64_GENERIC 作为最后兜底
+    ordered_platforms = []
+    seen_platforms = set()
+    for platform in platforms + ['ARM64_GENERIC']:
+        if platform and platform not in seen_platforms:
+            seen_platforms.add(platform)
+            ordered_platforms.append(platform)
 
     # 解析上传路径
     upload_paths = []
@@ -82,13 +179,23 @@ def parse_reproject(project_path):
         src = pair.get('key')
         dst = pair.get('value')
 
-        # 替换工作区变量
-        src = src.replace(f'$(WORKSPACE_{project_name})', project_path)
+        if not src or not dst:
+            continue
 
-        if os.path.exists(src):
-            upload_paths.append((src, dst))
+        # 展开 RealEvo 导出的工作区与输出目录变量
+        candidates = resolve_reproject_src_candidates(
+            src,
+            project_path,
+            project_name,
+            ordered_platforms,
+            debug_level,
+        )
+
+        resolved_src = next((candidate for candidate in candidates if os.path.exists(candidate)), None)
+        if resolved_src:
+            upload_paths.append((resolved_src, dst))
         else:
-            print(f"警告: 文件不存在，跳过: {src}")
+            print(f"警告: 文件不存在，跳过: {candidates[0]}")
 
     return board_ip, upload_paths
 
@@ -155,6 +262,10 @@ def main():
         upload_list = parsed_list
         print(f"板卡 IP: {board_ip}")
         print(f"找到 {len(upload_list)} 个上传项\n")
+
+        if not upload_list:
+            print("错误: 没有解析到任何有效上传项，请检查 .reproject 路径和构建产物是否存在")
+            sys.exit(1)
 
     if not board_ip:
         parser.error("必须指定板卡 IP (-i/--ip) 或使用包含 IP 配置的项目 (-P/--project)")

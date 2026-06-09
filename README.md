@@ -48,6 +48,15 @@ FTP 上传工具，用于手动上传文件到 SylixOS 板卡。
 
 > ⚠️ **主要在 Linux 环境下使用**
 
+当前脚本兼容以下 `.reproject` 本地路径风格：
+
+- `$(WORKSPACE_project)/build/<PLATFORM>/Release/...`
+- `$(WORKSPACE_project)/$(Output)/...`
+- 旧工程常见的项目根目录 `Release/...` 或 `Debug/...`
+
+脚本会优先结合 `.reproject` 的 `DeviceSetting/@Platform`、`config.mk` 的
+`PLATFORMS`/`DEBUG_LEVEL` 和当前 `build/` 目录来解析真实本地产物路径。
+
 ### 使用方法
 
 ```bash
