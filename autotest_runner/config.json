@@ -1,0 +1,31 @@
+{
+  "connection": {
+    "host": "10.13.21.43",
+    "port": 23,
+    "username": "root",
+    "password": "root",
+    "login_prompt": "login: ",
+    "password_prompt": "password: ",
+    "shell_prompt": "#",
+    "connect_timeout": 15,
+    "read_timeout": 5,
+    "command_timeout": 10,
+    "post_login_wait_seconds": 1.0,
+    "encoding": "utf-8",
+    "command_terminator": "\n",
+    "drain_wait_seconds": 0.15,
+    "connect_retry_count": 3,
+    "connect_retry_interval_seconds": 2
+  },
+  "runtime": {
+    "round_interval_seconds": 60,
+    "max_rounds": 0
+  },
+  "alert": {
+    "enable_windows_popup": false,
+    "title": "Autotest Runner Alert",
+    "log_dir": "logs",
+    "failure_output_dir": "logs/failures"
+  },
+  "checks_file": "test_cases.json"
+}

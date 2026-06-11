@@ -1,0 +1,39 @@
+[
+  {
+    "name": "interrupt_monitor",
+    "script": "checks/interrupt_monitor.py",
+    "config": {
+      "command": "ints",
+      "irq_name": "uart2_isr",
+      "capture_mode": "fixed_wait",
+      "wait_seconds": 0.5,
+      "samples": 2,
+      "sample_interval_seconds": 1
+    }
+  },
+  {
+    "name": "keyword_check",
+    "script": "checks/keyword_check.py",
+    "config": {
+      "pre_commands": [
+        "cd /apps/test"
+      ],
+      "command": "./test",
+      "capture_mode": "until_prompt",
+      "wait_seconds": 0.5,
+      "timeout_seconds": 30,
+      "required_keywords": [
+        "RESULT: PASS"
+      ],
+      "forbidden_keywords": [
+        "RESULT: FAIL",
+        "Segmentation fault",
+        "arguments error!",
+        "parameter(s) error.",
+        "panic",
+        "Oops"
+      ],
+      "success_message": "test finished with RESULT: PASS"
+    }
+  }
+]

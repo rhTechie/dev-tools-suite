@@ -1,46 +1,21 @@
 # DEV-TOOLS-SUITE
 
-SylixOS 开发辅助工具集，包含板卡调试、文件上传、寄存器读取等常用小工具。
+SylixOS 开发辅助工具集，包含板卡调试、自动化测试、文件上传、寄存器读取等常用小工具。
 
 ## 目录概览
 
 | 路径 | 说明 |
 |------|------|
-| `telnet_interrupt_monitor/` | 通过 Telnet 周期性监测目标 IRQ 中断计数 |
+| `autotest_runner/` | 基于 Telnet 的自动化测试工具，支持按测试项名称选择执行 |
 | `ftp_sylixos_upload/` | 将文件上传到 SylixOS 板卡 |
 | `readreg/` | 在 Linux 或 SylixOS 下读取寄存器值，用于调试和对比 |
 | `eth_dual_selftest/` | SylixOS 单板双网口原始二层自测用例，区分物理链路验证与吞吐基准 |
 
----
+## autotest_runner
 
-## telnet_interrupt_monitor
+基于 Telnet 的自动化测试工具，用于循环执行一个或多个测试项，并根据输出自动判定结果。
 
-通过 Telnet 循环连接指定设备，定期执行 `ints` 命令监测目标 IRQ 的中断次数。如果两次计数的值相同，则弹出系统警告（表示该 IRQ 可能停止了）。
-
-> ⚠️ **仅支持 Windows 环境**（使用 Windows API 弹窗）
-
-### 使用方法
-
-修改脚本末尾的默认配置：
-
-```python
-TARGET_HOST = "10.13.21.42"      # 目标设备 IP
-LOGIN_USERNAME = "root"         # 用户名
-LOGIN_PASSWORD = "root"         # 密码
-EXECUTE_COMMAND = "ints"        # 查询命令
-TARGET_IRQ_NAME = "uart2_isr"   # 要监测的 IRQ 名称
-CYCLE_INTERVAL_MINUTES = 1     # 轮询间隔（分钟）
-```
-
-直接运行脚本：
-
-```bash
-./telnet_interrupt_monitor/telnet_interrupt_monitor.py
-```
-
-按 `Ctrl+C` 可手动终止。
-
----
+详细使用说明见 `autotest_runner/README.md`。
 
 ## ftp_sylixos_upload
 
