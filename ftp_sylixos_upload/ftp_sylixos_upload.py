@@ -6,48 +6,202 @@ SylixOS FTP Upload Tool
 
 import argparse
 import os
+import posixpath
 import re
 import sys
 from ftplib import FTP
 import xml.etree.ElementTree as ET
 
-def ensure_dir(ftp, path):
+def normalize_remote_path(path):
+    """标准化远端 POSIX 路径"""
+    normalized = (path or '/').replace('\\', '/')
+    normalized = posixpath.normpath(normalized)
+    return '/' if normalized == '.' else normalized
+
+def join_remote_path(base, *parts):
+    """拼接远端 POSIX 路径"""
+    current = normalize_remote_path(base)
+    for part in parts:
+        current = posixpath.join(current, str(part).replace('\\', '/'))
+    return normalize_remote_path(current)
+
+def split_remote_path(path):
+    """拆分远端文件路径"""
+    normalized = normalize_remote_path(path)
+    remote_dir = posixpath.dirname(normalized)
+    remote_file = posixpath.basename(normalized)
+    return ('/' if remote_dir == '.' else remote_dir), remote_file
+
+def format_size(size):
+    """格式化文件大小输出"""
+    return f"{size/1024:.1f}KB" if size < 1024 * 1024 else f"{size/1024/1024:.1f}MB"
+
+def validate_permission_mode(mode):
+    """校验 chmod 权限格式"""
+    normalized = mode.strip()
+    if not re.fullmatch(r'[0-7]{3,4}', normalized):
+        raise argparse.ArgumentTypeError("权限格式必须是 3 或 4 位八进制，例如 755 或 0755")
+    return normalized[-3:]
+
+def send_ftp_command(ftp, commands):
+    """按顺序尝试发送 FTP 命令，直到成功"""
+    last_error = None
+
+    for command in commands:
+        try:
+            return command, ftp.sendcmd(command)
+        except Exception as exc:
+            last_error = exc
+
+    if last_error is None:
+        raise RuntimeError("没有可执行的 FTP 命令")
+    raise last_error
+
+def set_remote_permissions(ftp, remote_path, mode):
+    """上传完成后设置远端权限"""
+    normalized_path = normalize_remote_path(remote_path)
+    send_ftp_command(ftp, [
+        f'SITE CHMOD {mode} {normalized_path}',
+        f'SITE chmod {mode} {normalized_path}',
+    ])
+    print(f"  权限已设置: {normalized_path} -> {mode}")
+
+def sync_remote(ftp):
+    """执行远端 sync 落盘"""
+    command, response = send_ftp_command(ftp, [
+        'SITE SYNC',
+        'SITE sync',
+        'SYNC',
+        'sync',
+    ])
+    print(f"执行落盘命令: {command} -> {response}")
+
+def ensure_dir(ftp, path, chmod_mode=None):
     """确保目录存在，如果不存在则创建"""
+    path = normalize_remote_path(path)
     dirs = []
     while path and path != '/':
         dirs.append(path)
-        path = os.path.dirname(path)
+        path = posixpath.dirname(path)
 
     dirs.reverse()
     for d in dirs:
         try:
             ftp.cwd(d)
-        except:
+        except Exception:
             try:
-                parent = os.path.dirname(d)
+                parent = posixpath.dirname(d)
                 if parent and parent != '/':
                     ftp.cwd(parent)
                 ftp.mkd(d)
                 print(f"  创建目录: {d}")
-            except:
-                pass
+                if chmod_mode:
+                    set_remote_permissions(ftp, d, chmod_mode)
+            except Exception:
+                raise
 
-def upload_file(ftp, local_file, remote_path):
+def upload_file(ftp, local_file, remote_path, chmod_mode=None):
     """上传单个文件"""
-    remote_dir = os.path.dirname(remote_path)
-    remote_file = os.path.basename(remote_path)
+    remote_dir, remote_file = split_remote_path(remote_path)
+    remote_path = join_remote_path(remote_dir, remote_file)
 
     # 确保目标目录存在
-    ensure_dir(ftp, remote_dir)
+    ensure_dir(ftp, remote_dir, chmod_mode=chmod_mode)
     ftp.cwd(remote_dir)
 
     # 上传文件
     with open(local_file, 'rb') as f:
         ftp.storbinary(f'STOR {remote_file}', f)
 
+    if chmod_mode:
+        set_remote_permissions(ftp, remote_path, chmod_mode)
+
     size = os.path.getsize(local_file)
-    size_str = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
+    size_str = format_size(size)
     print(f"✓ 上传成功: {remote_path} ({size_str})")
+    return 1
+
+def upload_directory_contents(ftp, local_dir, remote_dir, chmod_mode=None):
+    """上传目录中的第一层普通文件"""
+    remote_dir = normalize_remote_path(remote_dir)
+    ensure_dir(ftp, remote_dir, chmod_mode=chmod_mode)
+    ftp.cwd(remote_dir)
+
+    uploaded_files = 0
+    skipped_items = []
+    files = sorted(os.listdir(local_dir))
+
+    for name in files:
+        local_path = os.path.join(local_dir, name)
+        if os.path.islink(local_path):
+            print(f"  警告: 跳过符号链接: {local_path}")
+            skipped_items.append(local_path)
+            continue
+        if not os.path.isfile(local_path):
+            print(f"  警告: 跳过非普通文件: {local_path}")
+            skipped_items.append(local_path)
+            continue
+
+        uploaded_files += upload_file(
+            ftp,
+            local_path,
+            join_remote_path(remote_dir, name),
+            chmod_mode=chmod_mode,
+        )
+
+    print(f"  ✓ 目录上传成功: {remote_dir}/ ({uploaded_files} 个文件)")
+    return uploaded_files, skipped_items
+
+def upload_directory_tree(ftp, local_root, remote_root='/', chmod_mode=None):
+    """递归上传目录树，适用于 rootfs 目录"""
+    local_root = os.path.abspath(local_root)
+    remote_root = normalize_remote_path(remote_root)
+
+    if not os.path.isdir(local_root):
+        raise RuntimeError(f"目录不存在: {local_root}")
+
+    uploaded_files = 0
+    skipped_items = []
+
+    ensure_dir(ftp, remote_root, chmod_mode=chmod_mode)
+
+    for current_root, dirnames, filenames in os.walk(local_root, topdown=True, followlinks=False):
+        dirnames.sort()
+        filenames.sort()
+
+        relative_dir = os.path.relpath(current_root, local_root)
+        remote_dir = remote_root if relative_dir == '.' else join_remote_path(remote_root, relative_dir)
+        ensure_dir(ftp, remote_dir, chmod_mode=chmod_mode)
+
+        kept_dirnames = []
+        for dirname in dirnames:
+            local_dir = os.path.join(current_root, dirname)
+            if os.path.islink(local_dir):
+                print(f"  警告: 跳过目录符号链接: {local_dir}")
+                skipped_items.append(local_dir)
+                continue
+            kept_dirnames.append(dirname)
+        dirnames[:] = kept_dirnames
+
+        for filename in filenames:
+            local_path = os.path.join(current_root, filename)
+            if os.path.islink(local_path):
+                print(f"  警告: 跳过文件符号链接: {local_path}")
+                skipped_items.append(local_path)
+                continue
+            if not os.path.isfile(local_path):
+                print(f"  警告: 跳过非普通文件: {local_path}")
+                skipped_items.append(local_path)
+                continue
+
+            remote_path = join_remote_path(remote_dir, filename)
+            uploaded_files += upload_file(ftp, local_path, remote_path, chmod_mode=chmod_mode)
+
+    print(f"✓ rootfs 目录上传完成: {local_root} -> {remote_root} ({uploaded_files} 个文件)")
+    if skipped_items:
+        print(f"警告: 跳过 {len(skipped_items)} 个符号链接或特殊文件")
+
+    return uploaded_files, skipped_items
 
 def parse_config_mk(project_path):
     """从 config.mk 中提取平台列表和构建类型"""
@@ -225,6 +379,10 @@ def main():
 
   # 批量上传（使用配置文件）
   %(prog)s -i 10.13.21.42 -c upload_list.txt
+
+  # 递归上传 rootfs 到板卡根目录
+  # 默认每个文件上传后 chmod 755，结束后执行一次 sync
+  %(prog)s -i 10.13.21.42 --rootfs /path/to/rootfs --rootfs-target /
         '''
     )
 
@@ -236,15 +394,30 @@ def main():
     parser.add_argument('-t', '--target', help='目标文件路径（完整路径）')
     parser.add_argument('-d', '--dir', help='目标目录（保持原文件名）')
     parser.add_argument('-c', '--config', help='配置文件（每行格式: 本地路径|目标路径）')
+    parser.add_argument('-r', '--rootfs', help='本地 rootfs 目录路径（递归上传，无需解析 .reproject）')
+    parser.add_argument('--rootfs-target', default='/', help='rootfs 上传目标根目录（默认: /）')
+    parser.add_argument('-m', '--chmod', type=validate_permission_mode, default='755', help='上传成功后执行远端 chmod（默认: 755）')
+    parser.add_argument('--no-chmod', action='store_true', help='禁用上传成功后的远端 chmod')
+    parser.add_argument('--sync', dest='sync', action='store_true', default=True, help='所有上传完成后执行一次远端 sync（默认开启）')
+    parser.add_argument('--no-sync', dest='sync', action='store_false', help='禁用所有上传完成后的远端 sync')
 
     args = parser.parse_args()
 
     # 检查参数
-    if not args.project and not args.config and not args.file:
-        parser.error("必须指定 -P/--project、-f/--file 或 -c/--config")
+    selected_modes = sum(bool(value) for value in [args.project, args.config, args.file, args.rootfs])
+    if selected_modes == 0:
+        parser.error("必须指定 -P/--project、-f/--file、-c/--config 或 -r/--rootfs")
+    if selected_modes > 1:
+        parser.error("-P/--project、-f/--file、-c/--config 和 -r/--rootfs 只能选择一种模式")
 
     if args.file and not (args.target or args.dir):
         parser.error("使用 -f/--file 时必须指定 -t/--target 或 -d/--dir")
+    if args.file and args.target and args.dir:
+        parser.error("-t/--target 和 -d/--dir 只能选择一个")
+    if args.rootfs_target != '/' and not args.rootfs:
+        parser.error("--rootfs-target 只能和 -r/--rootfs 一起使用")
+
+    chmod_mode = None if args.no_chmod else args.chmod
 
     # 解析 .reproject 文件
     upload_list = []
@@ -276,10 +449,12 @@ def main():
         ftp = FTP()
         ftp.connect(board_ip, 21, timeout=10)
         ftp.login(args.user, args.password)
+        ftp.set_pasv(True)
         print(f"登录成功！\n")
 
         success_count = 0
         fail_count = 0
+        uploaded_file_count = 0
 
         if args.project:
             # 从 .reproject 解析的上传列表
@@ -288,23 +463,16 @@ def main():
                     print(f"[{i}/{len(upload_list)}] {os.path.basename(src)}")
 
                     if os.path.isfile(src):
-                        upload_file(ftp, src, dst)
+                        uploaded_file_count += upload_file(ftp, src, dst, chmod_mode=chmod_mode)
                         success_count += 1
                     elif os.path.isdir(src):
-                        # 上传目录中的所有文件
-                        ensure_dir(ftp, dst)
-                        ftp.cwd(dst)
-
-                        files = [f for f in os.listdir(src) if os.path.isfile(os.path.join(src, f))]
-                        for filename in files:
-                            src_file = os.path.join(src, filename)
-                            with open(src_file, 'rb') as f:
-                                ftp.storbinary(f'STOR {filename}', f)
-                            size = os.path.getsize(src_file)
-                            size_str = f"{size/1024:.1f}KB" if size < 1024*1024 else f"{size/1024/1024:.1f}MB"
-                            print(f"  ✓ {filename} ({size_str})")
-
-                        print(f"  ✓ 目录上传成功: {dst}/ ({len(files)} 个文件)")
+                        uploaded_files, _ = upload_directory_contents(
+                            ftp,
+                            src,
+                            dst,
+                            chmod_mode=chmod_mode,
+                        )
+                        uploaded_file_count += uploaded_files
                         success_count += 1
 
                     print()
@@ -328,11 +496,35 @@ def main():
                     local_file, remote_path = parts
                     if os.path.exists(local_file):
                         print(f"上传: {os.path.basename(local_file)}")
-                        upload_file(ftp, local_file, remote_path)
+                        if os.path.isfile(local_file):
+                            uploaded_file_count += upload_file(
+                                ftp,
+                                local_file,
+                                remote_path,
+                                chmod_mode=chmod_mode,
+                            )
+                        elif os.path.isdir(local_file):
+                            uploaded_files, _ = upload_directory_tree(
+                                ftp,
+                                local_file,
+                                remote_path,
+                                chmod_mode=chmod_mode,
+                            )
+                            uploaded_file_count += uploaded_files
                         success_count += 1
                     else:
                         print(f"✗ 文件不存在: {local_file}")
                         fail_count += 1
+        elif args.rootfs:
+            print(f"上传 rootfs: {args.rootfs}")
+            uploaded_files, _ = upload_directory_tree(
+                ftp,
+                args.rootfs,
+                args.rootfs_target,
+                chmod_mode=chmod_mode,
+            )
+            uploaded_file_count += uploaded_files
+            success_count += 1
         else:
             # 上传单个文件
             if not os.path.exists(args.file):
@@ -341,21 +533,30 @@ def main():
 
             # 确定目标路径
             if args.target:
-                remote_path = args.target
+                remote_path = normalize_remote_path(args.target)
             else:
-                remote_path = os.path.join(args.dir, os.path.basename(args.file))
+                remote_path = join_remote_path(args.dir, os.path.basename(args.file))
 
             print(f"上传: {os.path.basename(args.file)}")
-            upload_file(ftp, args.file, remote_path)
+            uploaded_file_count += upload_file(
+                ftp,
+                args.file,
+                remote_path,
+                chmod_mode=chmod_mode,
+            )
             success_count += 1
+
+        if args.sync:
+            sync_remote(ftp)
 
         ftp.quit()
 
         print("\n=== 上传完成 ===")
-        if args.project or args.config:
+        if args.project or args.config or args.rootfs:
             print(f"成功: {success_count}")
             print(f"失败: {fail_count}")
             print(f"总计: {success_count + fail_count}")
+            print(f"实际上传文件数: {uploaded_file_count}")
         else:
             print("上传成功！")
 

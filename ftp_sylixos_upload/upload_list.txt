@@ -1,0 +1,18 @@
+# SylixOS FTP 批量上传配置示例
+# 每行格式:
+#   本地路径|目标路径
+#
+# 规则说明:
+# 1. 本地路径是文件时，目标路径表示远端完整文件路径
+# 2. 本地路径是目录时，工具会递归上传该目录，目标路径表示远端目录根
+# 3. 默认每个上传后的文件都会执行 chmod 755
+# 4. 默认全部上传完成后会执行一次 SITE SYNC
+
+# 示例 1: 上传单个驱动文件
+# /path/to/lyn_drv.ko|/lib/modules/drivers/lyn_drv.ko
+
+# 示例 2: 上传单个共享库文件
+# /path/to/liblyn_drv.so|/lib/liblyn_drv.so
+
+# 示例 3: 递归上传整个 rootfs 到板卡根目录 /
+/workspace/sdk/sdk3.2.37/@sylixos-bsp-sdk/rk3568_sdk_experience_64bit@3.2.37-25113000-ECS/images/tl3568_evm_x64/rootfs|/

@@ -23,6 +23,15 @@ FTP 上传工具，用于手动上传文件到 SylixOS 板卡。
 
 > ⚠️ **主要在 Linux 环境下使用**
 
+### 功能说明
+
+- 支持解析 SylixOS IDE 导出的 `.reproject` 自动上传
+- 支持上传单个文件到指定远端路径
+- 支持使用 `upload_list.txt` 批量上传多个文件或目录
+- 支持直接递归上传整个 `rootfs` 目录，无需解析 `.reproject`
+- 默认在每个文件上传完成后执行远端 `chmod 755`
+- 默认在全部上传完成后执行一次远端 `SITE SYNC`
+
 ### 使用方法
 
 ```bash
@@ -46,6 +55,12 @@ FTP 上传工具，用于手动上传文件到 SylixOS 板卡。
 
 # 批量上传（使用配置文件）
 ./ftp_sylixos_upload/ftp_sylixos_upload.py -i 10.13.21.42 -c upload_list.txt
+
+# 直接递归上传 rootfs 到板卡根目录
+./ftp_sylixos_upload/ftp_sylixos_upload.py -i 10.13.21.42 --rootfs /path/to/rootfs --rootfs-target /
+
+# 如需关闭默认 chmod 或 sync，可显式禁用
+./ftp_sylixos_upload/ftp_sylixos_upload.py -i 10.13.21.42 -f test.ko -t /tmp/test.ko --no-chmod --no-sync
 ```
 
 ### 参数说明
@@ -59,7 +74,47 @@ FTP 上传工具，用于手动上传文件到 SylixOS 板卡。
 | `-f, --file` | 本地文件路径 |
 | `-t, --target` | 目标文件路径（完整路径） |
 | `-d, --dir` | 目标目录（保持原文件名） |
-| `-c, --config` | 配置文件（每行格式: 本地路径\|目标路径） |
+| `-c, --config` | 配置文件（每行格式: 本地路径\|目标路径；支持文件或目录） |
+| `-r, --rootfs` | 本地 `rootfs` 目录路径（递归上传，无需解析 `.reproject`） |
+| `--rootfs-target` | `rootfs` 上传目标根目录（默认: `/`） |
+| `-m, --chmod` | 上传成功后执行远端 `chmod`，默认 `755` |
+| `--no-chmod` | 禁用上传成功后的远端 `chmod` |
+| `--sync` | 全部上传完成后执行一次远端 `sync`，默认开启 |
+| `--no-sync` | 禁用全部上传完成后的远端 `sync` |
+
+### `upload_list.txt` 示例
+
+配置文件每行格式如下：
+
+```txt
+本地路径|目标路径
+```
+
+- 左侧是文件时，右侧表示远端完整文件路径
+- 左侧是目录时，右侧表示远端目录根，工具会递归上传整个目录树
+
+当前仓库已提供样例文件：
+
+- `ftp_sylixos_upload/upload_list.txt`
+
+示例内容：
+
+```txt
+/workspace/sdk/sdk3.2.37/@sylixos-bsp-sdk/rk3568_sdk_experience_64bit@3.2.37-25113000-ECS/images/tl3568_evm_x64/rootfs|/
+```
+
+### 默认行为
+
+- FTP 连接后使用被动模式
+- 每个文件上传完成后默认执行远端 `SITE CHMOD 755 <path>`
+- 全部上传完成后默认执行一次远端 `SITE SYNC`
+- 若板卡不支持这些扩展命令，可使用 `--no-chmod` 或 `--no-sync` 关闭
+
+### 注意事项
+
+- 直接上传完整 `rootfs` 时，脚本会将所有普通文件统一设置为 `755`
+- 递归上传会跳过符号链接和其他特殊文件，只上传普通目录和普通文件
+- 对正在运行中的根文件系统直接覆盖有风险，建议先确认板卡当前场景允许这样操作
 
 ---
 
