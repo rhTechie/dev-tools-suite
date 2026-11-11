@@ -1,6 +1,6 @@
 # DEV-TOOLS-SUITE
 
-SylixOS 开发辅助工具集，包含板卡调试、自动化测试、文件上传、寄存器读取等常用小工具。
+SylixOS 开发辅助工具集，包含板卡调试、自动化测试、文件上传、寄存器读取、SD 卡格式化等常用小工具。
 
 ## 目录概览
 
@@ -10,6 +10,7 @@ SylixOS 开发辅助工具集，包含板卡调试、自动化测试、文件上
 | `ftp_sylixos_upload/` | 将文件上传到 SylixOS 板卡 |
 | `readreg/` | 在 Linux 或 SylixOS 下读取寄存器值，用于调试和对比 |
 | `eth_dual_selftest/` | SylixOS 单板双网口原始二层自测用例，区分物理链路验证与吞吐基准 |
+| `disk_format/` | SylixOS SD 卡一键格式化工具，将 `/dev/blk/sdcard-1` 重新分区并格式化为 FAT32 |
 
 ## autotest_runner
 
@@ -323,5 +324,39 @@ wget http://电脑ip:8888/file
 - 无陪测机条件下的网络配置快速验证
 - 现场调试时快速确认两个网口是否工作正常
 - 粗略观测双口直连场景下的板端吞吐水平
+
+---
+
+## disk_format
+
+SylixOS SD 卡一键格式化工具，固定操作 `/dev/blk/sdcard-1`，检查 SD 介质身份并拒绝 eMMC。工具会卸载目标已挂载分区，创建一个占用剩余空间的活动 MBR 分区，并格式化为 FAT32。
+
+### 编译方式
+
+SylixOS：
+
+将 `disk_format/disk_format.c` 复制到 SylixOS IDE 工程中编译。
+
+### 使用方法
+
+将产物部署到板卡 `/apps/disk_format/disk_format`，运行：
+
+```bash
+# 显示目标 SD 卡，确认后执行
+/apps/disk_format/disk_format
+
+# 跳过确认，直接格式化
+/apps/disk_format/disk_format --yes
+
+# 查看帮助
+/apps/disk_format/disk_format --help
+```
+
+### 注意事项
+
+- **执行会清空目标 SD 卡上的全部数据，请先备份。**
+- 运行前退出 SD 卡上的工作目录并关闭相关文件；卷被占用而无法卸载时，工具会停止。
+- 执行期间不要插拔 SD 卡，也不要运行其他挂载或磁盘管理程序。
+- 失败返回非零，已完成的卸载和分区操作不能回滚；最终挂载路径以工具输出为准。
 
 ---
