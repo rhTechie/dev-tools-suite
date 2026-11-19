@@ -18,16 +18,12 @@ def run(context, config):
     match_all_required = bool(config.get("match_all_required", True))
 
     for pre_command in pre_commands:
-        context.logger.log(f"keyword_check pre_command: {pre_command}")
-        pre_result = context.run_command(
+        context.run_command(
             pre_command,
             capture_mode="until_prompt",
             wait_seconds=wait_seconds,
             timeout_seconds=timeout_seconds,
         )
-        pre_output = pre_result["output"]
-        if pre_output:
-            context.logger.log_block("keyword_check pre_command output", pre_output)
 
     result = context.run_command(
         command,
@@ -36,8 +32,6 @@ def run(context, config):
         timeout_seconds=timeout_seconds,
     )
     output = result["output"]
-
-    context.logger.log_block("keyword_check command output", output or "<empty>")
 
     if required_keywords:
         if match_all_required:

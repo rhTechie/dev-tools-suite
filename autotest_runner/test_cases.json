@@ -20,7 +20,6 @@
       ],
       "command": "./test",
       "capture_mode": "until_prompt",
-      "wait_seconds": 0.5,
       "timeout_seconds": 30,
       "required_keywords": [
         "RESULT: PASS"
@@ -34,6 +33,27 @@
         "Oops"
       ],
       "success_message": "test finished with RESULT: PASS"
+    }
+  },
+  {
+    "name": "boundary_test",
+    "script": "checks/keyword_check.py",
+    "config": {
+      "command": "/apps/boundary_test/boundary_test /media/sdcard2",
+      "capture_mode": "until_prompt",
+      "timeout_seconds": 900,
+      "required_keywords": [
+        "Test result: PASS"
+      ],
+      "forbidden_keywords": [
+        "Test result: FAIL",
+        "Segmentation fault",
+        "arguments error!",
+        "parameter(s) error.",
+        "panic",
+        "Oops"
+      ],
+      "success_message": "boundary_test passed"
     }
   }
 ]

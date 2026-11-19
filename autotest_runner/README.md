@@ -244,6 +244,21 @@ python3 autotest_runner.py -c my_config.json keyword_check
 - `max_rounds`
   最大轮数，`0` 表示无限循环。
 
+- `full_log_every_n_rounds`
+  控制台每多少轮显示一次完整日志，默认 `5`，必须是正整数。第一轮始终显示完整日志，例如 `5` 表示第 1、6、11…轮显示完整日志，其余轮次保留 `Round N started`、`Round N passed` 和 `Sleeping ... seconds before next round` 状态信息，隐藏命令及输出等详细日志；设为 `1` 可每轮显示完整日志。失败、运行时异常或中途按 Ctrl+C 时，会显示当前轮的完整日志。磁盘日志始终保存所有轮次的完整内容。
+
+示例：
+
+```json
+"runtime": {
+  "round_interval_seconds": 60,
+  "max_rounds": 0,
+  "full_log_every_n_rounds": 5
+}
+```
+
+完整日志会记录预处理命令、主命令的输入和原始输出（包含命令回显及 shell 提示符），关键字判断仍使用清理后的输出。命令超时或连接断开时，也会保留已收到的输出。
+
 #### alert
 
 用于描述失败后的提醒和日志行为。

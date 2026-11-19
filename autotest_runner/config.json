@@ -1,6 +1,6 @@
 {
   "connection": {
-    "host": "10.13.21.43",
+    "host": "10.13.21.42",
     "port": 23,
     "username": "root",
     "password": "root",
@@ -19,7 +19,8 @@
   },
   "runtime": {
     "round_interval_seconds": 60,
-    "max_rounds": 0
+    "max_rounds": 0,
+    "full_log_every_n_rounds": 5
   },
   "alert": {
     "enable_windows_popup": false,

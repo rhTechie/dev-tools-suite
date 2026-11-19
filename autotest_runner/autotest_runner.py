@@ -65,11 +65,28 @@ class Logger:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         self.log_path = log_path
         self._fp = open(log_path, "a", encoding="utf-8")
+        self._quiet_round_offset: int | None = None
 
-    def log(self, message: str) -> None:
+    def begin_round(self, *, verbose: bool) -> None:
+        """Keep every line on disk, deferring quiet-round console output."""
+        self._fp.flush()
+        self._quiet_round_offset = None if verbose else self._fp.tell()
+
+    def end_round(self, *, replay: bool = False) -> None:
+        offset = self._quiet_round_offset
+        self._quiet_round_offset = None
+        if replay and offset is not None:
+            self._fp.flush()
+            with open(self.log_path, "r", encoding="utf-8") as source:
+                source.seek(offset)
+                for line in source:
+                    print(line, end="", flush=True)
+
+    def log(self, message: str, *, force_console: bool = False) -> None:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] {message}"
-        print(line, flush=True)
+        if self._quiet_round_offset is None or force_console:
+            print(line, flush=True)
         self._fp.write(line + "\n")
         self._fp.flush()
 
@@ -179,6 +196,10 @@ def load_config(config_path: str) -> dict[str, Any]:
 
     runtime.setdefault("round_interval_seconds", 60)
     runtime.setdefault("max_rounds", 0)
+    runtime.setdefault("full_log_every_n_rounds", 5)
+    full_log_interval = runtime["full_log_every_n_rounds"]
+    if type(full_log_interval) is not int or full_log_interval <= 0:
+        raise ConfigError("runtime.full_log_every_n_rounds must be a positive integer")
 
     alert.setdefault("enable_windows_popup", False)
     alert.setdefault("title", "Autotest Runner Alert")
@@ -280,11 +301,6 @@ class RawTelnetClient:
 
     def read_available_text(self, quiet_seconds: float) -> str:
         deadline = time.time() + quiet_seconds
-        chunks: list[bytes] = []
-
-        if self._display_buffer:
-            chunks.append(bytes(self._display_buffer))
-            self._display_buffer.clear()
 
         while time.time() < deadline:
             remaining = deadline - time.time()
@@ -294,12 +310,18 @@ class RawTelnetClient:
             except socket.timeout:
                 continue
             if not payload:
-                break
+                raise EOFError("remote closed Telnet connection")
             display = self._consume_telnet_bytes(payload)
             if display:
-                chunks.append(display)
+                self._display_buffer.extend(display)
 
-        return b"".join(chunks).decode(self.encoding, errors="ignore")
+        return self.take_buffered_text()
+
+    def take_buffered_text(self) -> str:
+        """Return already received output, including partial output after an error."""
+        data = bytes(self._display_buffer)
+        self._display_buffer.clear()
+        return data.decode(self.encoding, errors="ignore")
 
     def _recv_once(self, deadline: float) -> None:
         remaining = deadline - time.time()
@@ -391,24 +413,33 @@ class RunnerContext:
         timeout_seconds: float | None = None,
         strip_prompt: bool = True,
     ) -> dict[str, str]:
-        self.drain_unsolicited_output()
-        self.client.write_text(command + self.connection["command_terminator"])
-
         if timeout_seconds is None:
             timeout_seconds = float(self.connection["command_timeout"])
 
-        if capture_mode == "until_prompt":
-            prompt = self.connection.get("shell_prompt")
-            if not prompt:
-                raise RunnerFailure("connection.shell_prompt is required for until_prompt mode")
-            raw_text = self.client.read_until_text(prompt, timeout_seconds)
-            output = clean_command_output(raw_text, command, prompt if strip_prompt else None)
-        elif capture_mode == "fixed_wait":
-            time.sleep(wait_seconds)
-            raw_text = self.client.read_available_text(float(self.connection["drain_wait_seconds"]))
-            output = clean_command_output(raw_text, command, self.connection.get("shell_prompt"))
-        else:
+        if capture_mode not in ("until_prompt", "fixed_wait"):
             raise ConfigError(f"unsupported capture_mode: {capture_mode}")
+        prompt = self.connection.get("shell_prompt")
+        if capture_mode == "until_prompt" and not prompt:
+            raise RunnerFailure("connection.shell_prompt is required for until_prompt mode")
+
+        self.drain_unsolicited_output()
+        self.logger.log_block("Command input:", command)
+        try:
+            self.client.write_text(command + self.connection["command_terminator"])
+            if capture_mode == "until_prompt":
+                raw_text = self.client.read_until_text(prompt, timeout_seconds)
+            else:
+                time.sleep(wait_seconds)
+                raw_text = self.client.read_available_text(float(self.connection["drain_wait_seconds"]))
+        except BaseException:
+            # Do not read from the socket again: a timeout or disconnect may have
+            # left useful diagnostics in the receive buffer.
+            partial_output = self.client.take_buffered_text()
+            self.logger.log_block("Command output (incomplete):", partial_output)
+            raise
+
+        self.logger.log_block("Command output:", raw_text)
+        output = clean_command_output(raw_text, command, prompt if strip_prompt else None)
 
         return {
             "command": command,
@@ -417,7 +448,13 @@ class RunnerContext:
         }
 
     def drain_unsolicited_output(self) -> str:
-        text = self.client.read_available_text(float(self.connection["drain_wait_seconds"])).strip()
+        try:
+            text = self.client.read_available_text(float(self.connection["drain_wait_seconds"]))
+        except BaseException:
+            text = self.client.take_buffered_text()
+            if text:
+                self.logger.log_block("Unsolicited output (incomplete):", text)
+            raise
         if text:
             self.logger.log_block("Unsolicited output:", text)
         return text
@@ -610,19 +647,23 @@ class AutotestRunner:
 
             while max_rounds <= 0 or round_index < max_rounds:
                 round_index += 1
-                self.logger.log("")
                 self.logger.log(f"Round {round_index} started")
+                self.logger.begin_round(
+                    verbose=(round_index - 1) % self.runtime.get("full_log_every_n_rounds", 5) == 0
+                )
 
                 for check_config, check_module in self.loaded_checks:
                     self.run_check(round_index, check_config, check_module)
 
-                self.logger.log(f"Round {round_index} passed")
+                self.logger.log(f"Round {round_index} passed", force_console=True)
 
                 if max_rounds > 0 and round_index >= max_rounds:
+                    self.logger.end_round()
                     break
 
                 sleep_seconds = float(self.runtime["round_interval_seconds"])
-                self.logger.log(f"Sleeping {sleep_seconds} seconds before next round")
+                self.logger.log(f"Sleeping {sleep_seconds} seconds before next round", force_console=True)
+                self.logger.end_round()
                 time.sleep(sleep_seconds)
 
             elapsed = time.time() - self.session_started_at
@@ -630,18 +671,33 @@ class AutotestRunner:
             return 0
 
         except KeyboardInterrupt:
+            self.logger.end_round(replay=True)
             elapsed = time.time() - self.session_started_at
             self.logger.log(f"Stopped by user after {round_index} rounds in {elapsed:.1f} seconds")
             return 130
 
         except RunnerFailure as exc:
+            self.logger.end_round(replay=True)
             elapsed = time.time() - self.session_started_at
             self.handle_failure(exc, elapsed)
             return 1
 
         except ConfigError as exc:
+            self.logger.end_round(replay=True)
             self.logger.log(f"Config error during runtime: {exc}")
             return 2
+
+        except Exception as exc:
+            self.logger.end_round(replay=True)
+            elapsed = time.time() - self.session_started_at
+            self.handle_failure(
+                RunnerFailure(
+                    f"Unexpected {type(exc).__name__}: {exc}",
+                    round_index=round_index or None,
+                ),
+                elapsed,
+            )
+            return 1
 
         finally:
             self.close()

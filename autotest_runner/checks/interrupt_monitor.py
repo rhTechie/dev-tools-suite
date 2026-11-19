@@ -40,10 +40,6 @@ def run(context, config):
         )
         output = result["output"]
         outputs.append(output)
-        context.logger.log_block(
-            f"interrupt_monitor sample {index + 1}/{samples} output",
-            output or "<empty>",
-        )
 
         match = re.search(pattern, output, re.DOTALL)
         if not match:

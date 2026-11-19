@@ -1,4 +1,15 @@
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
 
-autotest_runner/logs/
+# Editor swap files
+*.swp
+*.swo
+
+# Autotest runtime logs and failure snapshots
+/autotest_runner/logs/
+
+# Local board settings and test cases; keep the default JSON files tracked.
+# Run with -c config.local.json and set checks_file to test_cases.local.json.
+/autotest_runner/config.local.json
+/autotest_runner/test_cases.local.json
